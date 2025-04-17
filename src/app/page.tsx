@@ -147,17 +147,44 @@ export default function Home() {
   const [scanType, setScanType] = useState<'camera' | 'manual'>('camera');
 
   useEffect(() => {
-    // Load products from local storage on component mount
-    const storedProducts = localStorage.getItem('scannedProducts');
-    if (storedProducts) {
-      setScannedProducts(JSON.parse(storedProducts).map((product: any) => ({
-        ...product,
-        expirationDate: product.expirationDate ? new Date(product.expirationDate) : null,
-        quantity: product.quantity || 1,
-      })));
+    const loadProducts = async () => {
+      try {
+      // Load products from local storage on component mount
+      const storedProducts = localStorage.getItem('scannedProducts');
+      if (storedProducts) {
+        setScannedProducts(JSON.parse(storedProducts).map((product: any) => ({
+          ...product,
+          expirationDate: product.expirationDate ? new Date(product.expirationDate) : null,
+          quantity: product.quantity || 1,
+        })));
+      }
+    } catch(error){
+      console.error("Error loading products from local storage:", error);
+      toast({
+          variant: 'destructive',
+          title: 'Erro',
+          description: 'Erro ao carregar produtos salvos.',
+        });
     }
+    }
+    loadProducts();
+  }, []);
 
-    // Request camera permission on component mount
+  useEffect(() => {
+    try{
+    // Save products to local storage whenever scannedProducts changes
+    localStorage.setItem('scannedProducts', JSON.stringify(scannedProducts));
+    } catch (error){
+      console.error("Error saving products to local storage:", error);
+        toast({
+            variant: 'destructive',
+            title: 'Erro',
+            description: 'Erro ao salvar produtos. As alterações podem não ser persistidas.',
+          });
+    }
+  }, [scannedProducts]);
+
+  useEffect(() => {
     const getCameraPermission = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
@@ -169,6 +196,7 @@ export default function Home() {
       } catch (error) {
         console.error('Error accessing camera:', error);
         setHasCameraPermission(false);
+        setIsCameraActive(false);
         toast({
           variant: 'destructive',
           title: 'Camera Access Denied',
@@ -176,52 +204,57 @@ export default function Home() {
         });
       }
     };
-    getCameraPermission();
+
+    const initializeCamera = async () => {
+      try {
+        await getCameraPermission();
+      } catch (error) {
+        console.error("Error initializing camera:", error);
+      }
+    };
+
+    initializeCamera();
   }, []);
 
-  useEffect(() => {
-    // Save products to local storage whenever scannedProducts changes
-    localStorage.setItem('scannedProducts', JSON.stringify(scannedProducts));
-  }, [scannedProducts]);
-
   const handleScan = async () => {
-    if (!isValidEan(eanCode)) {
-      setIsEanValid(false);
-      toast({
-        title: 'Error',
-        description: 'Código EAN inválido.',
-      });
-      return;
-    }
-
-    setIsEanValid(true);
-
-    if (!expirationDate) {
-      toast({
-        title: 'Error',
-        description: 'Por favor, selecione uma data de validade.',
-      });
-      return;
-    }
-
-    const parsedQuantity = Number(quantity);
-    if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+    try {
+      if (!isValidEan(eanCode)) {
+        setIsEanValid(false);
         toast({
-            title: 'Error',
-            description: 'A quantidade deve ser um número maior que zero.',
+          title: 'Error',
+          description: 'Código EAN inválido.',
         });
         return;
-    }
+      }
 
-    if (quantity <= 0) {
-      toast({
-        title: 'Error',
-        description: 'A quantidade deve ser maior que zero.',
-      });
-      return;
-    }
+      setIsEanValid(true);
 
-    getProductName(eanCode, setIsManualNamingOpen).then(generatedProductName => {
+      if (!expirationDate) {
+        toast({
+          title: 'Error',
+          description: 'Por favor, selecione uma data de validade.',
+        });
+        return;
+      }
+
+      const parsedQuantity = Number(quantity);
+      if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+          toast({
+              title: 'Error',
+              description: 'A quantidade deve ser um número maior que zero.',
+          });
+          return;
+      }
+
+      if (quantity <= 0) {
+        toast({
+          title: 'Error',
+          description: 'A quantidade deve ser maior que zero.',
+        });
+        return;
+      }
+
+      const generatedProductName = await getProductName(eanCode, setIsManualNamingOpen);
       setProductName(generatedProductName);
       if (generatedProductName === 'Nome do Produto Não Encontrado') {
         // Open the dialog for manual naming
@@ -244,7 +277,14 @@ export default function Home() {
         title: 'Sucesso',
         description: 'Produto escaneado e salvo.',
       });
-    });
+    } catch (error) {
+      console.error('Error during handleScan:', error);
+      toast({
+          variant: 'destructive',
+          title: 'Erro',
+          description: 'Ocorreu um erro ao processar o produto escaneado.',
+        });
+    }
   };
 
   const confirmManualNaming = () => {
@@ -320,6 +360,8 @@ export default function Home() {
         title: 'Erro',
         description: 'Erro ao gerar ou salvar o arquivo Excel.',
       });
+    } finally {
+      clearProductList();
     }
   };
 
@@ -368,6 +410,8 @@ export default function Home() {
         title: 'Erro',
         description: 'Erro ao gerar ou compartilhar o arquivo Excel.',
       });
+    } finally {
+      clearProductList();
     }
   };
 
@@ -419,34 +463,36 @@ export default function Home() {
           <div className="flex justify-around">
             <Button
               variant={scanType === 'manual' ? 'default' : 'outline'}
-              onClick={() => setScanType('manual')}
-              disabled={hasCameraPermission}
+              onClick={() => {
+                setIsCameraActive(false);
+                setScanType('manual');
+              }}
             >
               Digitar EAN
             </Button>
             <Button
               variant={scanType === 'camera' ? 'default' : 'outline'}
-              onClick={() => setScanType('camera')}
-              disabled={!hasCameraPermission}
+              onClick={() => {
+                setIsCameraActive(true);
+                setScanType('camera');
+              }}
             >
               Escanear com Câmera
             </Button>
           </div>
 
-          {scanType === 'camera' && hasCameraPermission ? (
-            <div className="relative">
-              <BarcodeScannerComponent onBarcodeDetected={handleBarcodeDetected} isCameraActive={isCameraActive}/>
-            </div>
-          ) : null}
-
-          {scanType === 'camera' && !hasCameraPermission && (
-            <Alert variant="destructive">
-              <AlertTitle>Camera Access Required</AlertTitle>
-              <AlertDescription>
-                Please allow camera access to use this feature.
-              </AlertDescription>
-            </Alert>
-          )}
+          
+          <div className="relative">
+            <BarcodeScannerComponent onBarcodeDetected={handleBarcodeDetected} isCameraActive={isCameraActive}/>
+            {!hasCameraPermission && (
+              <Alert variant="destructive">
+                <AlertTitle>Camera Access Required</AlertTitle>
+                <AlertDescription>
+                  Please allow camera access to use this feature.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
 
           {scanType === 'manual' ? (
             <div className="grid gap-2">
@@ -566,5 +612,3 @@ export default function Home() {
     </div>
   );
 }
-
-

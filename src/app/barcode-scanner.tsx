@@ -40,9 +40,13 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
 
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
-        videoRef.current.srcObject = null;
+        try {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+        } catch (error) {
+          console.error("Error stopping camera:", error);
+        }
       }
     };
   }, [isCameraActive, toast]);
@@ -78,9 +82,11 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
               onBarcodeDetected(code);
 
               // Stop the camera
-              const stream = videoRef.current.srcObject as MediaStream;
-              stream.getTracks().forEach(track => track.stop());
-              videoRef.current.srcObject = null;
+              if (videoRef.current && videoRef.current.srcObject) {
+                const stream = videoRef.current.srcObject as MediaStream;
+                stream.getTracks().forEach(track => track.stop());
+                videoRef.current.srcObject = null;
+              }
             } else {
               requestAnimationFrame(detectBarcodes);
             }
@@ -98,7 +104,7 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
             }
           }
         };
-        if (isCameraActive) {
+        if (isCameraActive && videoRef.current.srcObject) { // Check if the video stream is active
         try {
           detectBarcodes();
         } catch (error) {
@@ -126,17 +132,21 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
     return () => {
       // Cleanup function to stop the camera when the component unmounts
       if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
-        videoRef.current.srcObject = null;
+        try {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+        } catch (error) {
+          console.error("Error stopping camera in cleanup:", error);
+        }
       }
     };
   }, [isCameraActive, onBarcodeDetected, toast]);
 
   return (
     <div className="relative">
-      {hasCameraPermission ? (
-        <video ref={videoRef} className="w-full aspect-video rounded-md" autoPlay muted style={{display: isCameraActive ? 'block' : 'none'}}/>
+      {hasCameraPermission && isCameraActive ? (
+        <video ref={videoRef} className="w-full aspect-video rounded-md" autoPlay muted />
       ) : (
         <Alert variant="destructive">
           <AlertTitle>Camera Access Required</AlertTitle>
@@ -150,5 +160,3 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
 };
 
 export default BarcodeScannerComponent;
-
-    
