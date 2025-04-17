@@ -3,6 +3,7 @@
 import React, {useState, useEffect, useRef} from 'react';
 import {useRouter} from 'next/navigation';
 import {generateProductName} from '@/ai/flows/generate-product-name';
+import {decodeBarcode} from '@/ai/flows/decode-barcode'; // Import the new flow
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Calendar} from '@/components/ui/calendar';
@@ -16,10 +17,6 @@ import {AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, A
 import {ThemeToggle} from "@/components/theme-toggle" // Certifique-se de que o caminho está correto
 import {Alert, AlertDescription, AlertTitle} from "@/components/ui/alert";
 import dynamic from 'next/dynamic';
-
-const BarcodeScannerComponent = dynamic(() => import('./barcode-scanner'), {
-  ssr: false,
-});
 
 interface Product {
   eanCode: string;
@@ -131,7 +128,6 @@ const getProductName = async (eanCode: string, setManualNaming: (value: boolean)
 };
 
 export default function Home() {
-  const [eanCode, setEanCode] = useState('');
   const [productName, setProductName] = useState<string>('');
   const [expirationDate, setExpirationDate] = useState<Date | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
@@ -145,6 +141,9 @@ export default function Home() {
   const [hasCameraPermission, setHasCameraPermission] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [scanType, setScanType] = useState<'camera' | 'manual'>('camera');
+  const [eanCode, setEanCode] = useState('');
+  const [capturedImage, setCapturedImage] = useState<string | null>(null); // Store the captured image as a data URL
+  const [isProcessingImage, setIsProcessingImage] = useState(false); // Indicate that image processing is underway
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -354,15 +353,15 @@ export default function Home() {
       XLSX.utils.book_append_sheet(wb, ws, 'Validades');
       XLSX.writeFile(wb, 'validades.xlsx');
       clearProductList();
+        setScannedProducts([]);
+        localStorage.removeItem('scannedProducts');
     } catch (error) {
       console.error('Erro ao exportar para Excel:', error);
       toast({
         title: 'Erro',
         description: 'Erro ao gerar ou salvar o arquivo Excel.',
       });
-    } finally {
-      clearProductList();
-    }
+    } 
   };
 
   const shareExcel = async () => {
@@ -397,7 +396,8 @@ export default function Home() {
         })
           .then(() => console.log('Compartilhado com sucesso'))
           .catch((error) => console.error('Erro ao compartilhar:', error));
-          clearProductList();
+           setScannedProducts([]);
+          localStorage.removeItem('scannedProducts');
       } else {
         toast({
           title: 'Erro',
@@ -410,8 +410,6 @@ export default function Home() {
         title: 'Erro',
         description: 'Erro ao gerar ou compartilhar o arquivo Excel.',
       });
-    } finally {
-      clearProductList();
     }
   };
 
@@ -438,6 +436,62 @@ export default function Home() {
       });
     }
   };
+
+  // New function to capture the image from the camera
+  const captureImage = () => {
+    if (videoRef.current) {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        const imageUrl = canvas.toDataURL('image/png'); // Convert to data URL
+
+        setCapturedImage(imageUrl); // Set the captured image
+        decodeImage(imageUrl); // Immediately attempt to decode the image
+      } else {
+         toast({
+          variant: 'destructive',
+          title: 'Canvas Error',
+          description: 'Could not get canvas context.',
+        });
+      }
+    } else {
+      toast({
+        variant: 'destructive',
+        title: 'Video Error',
+        description: 'Video element not found.',
+      });
+    }
+  };
+
+  // New function to decode the image and set the EAN code
+  const decodeImage = async (imageUrl: string) => {
+    setIsProcessingImage(true); // Indicate processing
+
+    try {
+      const result = await decodeBarcode({imageUrl}); // Call the Genkit flow
+      if (result.eanCode) {
+        setEanCode(result.eanCode); // Set the EAN code if found
+      } else {
+        toast({
+          title: 'Barcode Not Found',
+          description: 'Nenhum código de barras encontrado na imagem.',
+        });
+      }
+    } catch (error) {
+      console.error('Error decoding barcode:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro de Decodificação',
+        description: 'Ocorreu um erro ao decodificar o código de barras.',
+      });
+    } finally {
+      setIsProcessingImage(false); // End processing, whether success or fail
+    }
+  };
+
 
   const handleBarcodeDetected = (code: string) => {
     setEanCode(code);
@@ -482,17 +536,27 @@ export default function Home() {
           </div>
 
           
-          <div className="relative">
-            <BarcodeScannerComponent onBarcodeDetected={handleBarcodeDetected} isCameraActive={isCameraActive}/>
-            {!hasCameraPermission && (
-              <Alert variant="destructive">
-                <AlertTitle>Camera Access Required</AlertTitle>
-                <AlertDescription>
-                  Please allow camera access to use this feature.
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
+            {/* Camera View and Capture Button */}
+            <div className="relative">
+              <video ref={videoRef} className="w-full aspect-video rounded-md" autoPlay muted />
+
+              {hasCameraPermission ? (
+                <Button
+                  onClick={captureImage}
+                  disabled={isProcessingImage}
+                  className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground"
+                >
+                  {isProcessingImage ? 'Processando...' : 'Capturar Imagem'}
+                </Button>
+              ) : (
+                <Alert variant="destructive">
+                  <AlertTitle>Camera Access Required</AlertTitle>
+                  <AlertDescription>
+                    Please allow camera access to use this feature.
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
 
           {scanType === 'manual' ? (
             <div className="grid gap-2">
@@ -607,8 +671,9 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="w-full text-center mt-8 p-4 text-muted-foreground">
-        © 2024 Evandro Fernandes. Todos os direitos reservados.
+        © 2025 Evandro Fernandes. Todos os direitos reservados.
       </footer>
     </div>
   );
 }
+
