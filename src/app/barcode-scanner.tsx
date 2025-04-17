@@ -99,7 +99,16 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
           }
         };
         if (isCameraActive) {
+        try {
           detectBarcodes();
+        } catch (error) {
+          console.error('Error during barcode detection:', error);
+          toast({
+            variant: 'destructive',
+            title: 'Barcode Scanner Error',
+            description: 'An unexpected error occurred while scanning. Please try again.',
+          });
+        }
         }
       }
     };
@@ -141,3 +150,5 @@ const BarcodeScannerComponent: React.FC<BarcodeScannerProps> = ({onBarcodeDetect
 };
 
 export default BarcodeScannerComponent;
+
+    

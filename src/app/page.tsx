@@ -144,7 +144,7 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hasCameraPermission, setHasCameraPermission] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [scanType, setScanType] = useState<'camera' | 'manual'>('manual');
+  const [scanType, setScanType] = useState<'camera' | 'manual'>('camera');
 
   useEffect(() => {
     // Load products from local storage on component mount
@@ -339,7 +339,7 @@ export default function Home() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
         setHasCameraPermission(true);
-        // setIsCameraActive(true); // Automatically start the camera
+        setIsCameraActive(true); // Automatically start the camera
         // if (videoRef.current) {
         //   videoRef.current.srcObject = stream;
         // }
@@ -353,10 +353,8 @@ export default function Home() {
         });
       }
     };
-    if (scanType === 'camera') {
       getCameraPermission();
-    }
-  }, [scanType]);
+  }, []);
 
   const handleCameraScan = () => {
     try {
@@ -396,6 +394,7 @@ export default function Home() {
             <Button
               variant={scanType === 'manual' ? 'default' : 'outline'}
               onClick={() => setScanType('manual')}
+              disabled={hasCameraPermission}
             >
               Digitar EAN
             </Button>
@@ -533,6 +532,11 @@ export default function Home() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Footer */}
+      <footer className="w-full text-center mt-8 p-4 text-muted-foreground">
+        © 2024 Evandro Fernandes. Todos os direitos reservados.
+      </footer>
     </div>
   );
 }
