@@ -1,679 +1,135 @@
-'use client';
-
-import React, {useState, useEffect, useRef} from 'react';
-import {useRouter} from 'next/navigation';
-import {generateProductName} from '@/ai/flows/generate-product-name';
-import {decodeBarcode} from '@/ai/flows/decode-barcode'; // Import the new flow
-import {Button} from '@/components/ui/button';
-import {Input} from '@/components/ui/input';
-import {Calendar} from '@/components/ui/calendar';
-import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/components/ui/card';
-import {format} from 'date-fns';
-import {useToast} from '@/hooks/use-toast';
-import {Textarea} from '@/components/ui/textarea';
-import {Icons} from '@/components/icons';
-import * as XLSXTYPE from 'xlsx';
-import {AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger} from "@/components/ui/alert-dialog";
-import {ThemeToggle} from "@/components/theme-toggle" // Certifique-se de que o caminho está correto
-import {Alert, AlertDescription, AlertTitle} from "@/components/ui/alert";
-import dynamic from 'next/dynamic';
-
-interface Product {
-  eanCode: string;
-  productName: string;
-  expirationDate: Date | null;
-  quantity: number;
-}
-
-const isValidEan = (ean: string): boolean => {
-  if (!/^\d+$/.test(ean)) return false;
-  if (ean.length !== 13) return false;
-
-  let sum = 0;
-  for (let i = 12; i >= 0; i--) {
-    const digit = parseInt(ean[i], 10);
-    if (i % 2 === 0) {
-      sum += digit;
-    } else {
-      sum += 3 * digit;
-    }
-  }
-  return sum % 10 === 0;
-};
-
-const ExpirationAlert = ({expirationDate}: { expirationDate: Date | null }) => {
-  const {toast} = useToast();
-
-  useEffect(() => {
-    if (!expirationDate) {
-      return;
-    }
-
-    const now = new Date();
-    const timeDiff = expirationDate.getTime() - now.getTime();
-    const daysUntilExpiration = Math.ceil(timeDiff / (1000 * 3600 * 24));
-
-    if (daysUntilExpiration <= 30 && daysUntilExpiration > 7) {
-      toast({
-        title: 'Alerta de Validade',
-        description: `Produto expira em ${daysUntilExpiration} dias.`,
-      });
-    } else if (daysUntilExpiration <= 7 && daysUntilExpiration >= 0) {
-      toast({
-        title: 'Aviso de Validade',
-        description: `Produto expira em ${daysUntilExpiration} dias!`,
-      });
-    } else if (daysUntilExpiration < 0) {
-      toast({
-        title: 'Produto Expirado',
-        description: 'Este produto já expirou!',
-      });
-    }
-  }, [expirationDate, toast]);
-
-  return null; // This component doesn't render anything
-};
-
-// Function to fetch product name from an external API
-const fetchProductName = async (eanCode: string): Promise<string> => {
-  try {
-    // Replace with actual API endpoint that supports Angola
-    const apiUrl = `https://world.openfoodfacts.org/api/v0/product/${eanCode}.json`;
-    const response = await fetch(apiUrl);
-    const data = await response.json();
-
-    if (data.status === 1 && data.product) {
-      // Prioritize product name in Portuguese if available
-      if (data.product.product_name_pt) {
-        return data.product.product_name_pt;
-      }
-      return data.product.product_name;
-    } else {
-      console.warn(`Product with EAN ${eanCode} not found in external API`);
-      return ''; // Return empty string if product not found
-    }
-  } catch (error) {
-    console.error('Error fetching product name:', error);
-    return ''; // Return empty string on error
-  }
-};
-
-const getProductName = async (eanCode: string, setManualNaming: (value: boolean) => void) => {
-  try {
-    // First, try to fetch from the external API
-    let productName = await fetchProductName(eanCode);
-
-    // If the external API doesn't return a name, fallback to Genkit
-    if (!productName) {
-      try {
-        const result = await generateProductName({eanCode});
-        productName = result.productName;
-      } catch (error) {
-        console.error('Error generating product name:', error);
-        productName = '';
-      }
-    }
-
-    if (!productName) {
-      setManualNaming(true);
-      return 'Nome do Produto Não Encontrado';
-    } else {
-      setManualNaming(false);
-      return productName;
-    }
-  } catch (error) {
-    console.error('Error in getProductName:', error);
-    return 'Erro ao obter nome do produto';
-  }
-};
+import React, { useEffect, useRef, useState } from 'react';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import { format } from 'date-fns';
+import { Calendar } from '@/components/ui/calendar';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Share2 } from 'lucide-react';
+import { exportToExcel } from '@/lib/excel';
 
 export default function Home() {
-  const [productName, setProductName] = useState<string>('');
-  const [expirationDate, setExpirationDate] = useState<Date | null>(null);
-  const [quantity, setQuantity] = useState<number>(1);
-  const [scannedProducts, setScannedProducts] = useState<Product[]>([]);
-  const router = useRouter();
-  const {toast} = useToast();
-  const [isEanValid, setIsEanValid] = useState(true);
-  const [isManualNamingOpen, setIsManualNamingOpen] = useState(false);
-  const [manualProductName, setManualProductName] = useState('');
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [hasCameraPermission, setHasCameraPermission] = useState(false);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [scanType, setScanType] = useState<'camera' | 'manual'>('camera');
-  const [eanCode, setEanCode] = useState('');
-  const [capturedImage, setCapturedImage] = useState<string | null>(null); // Store the captured image as a data URL
-  const [isProcessingImage, setIsProcessingImage] = useState(false); // Indicate that image processing is underway
+  const videoRef = useRef(null);
+  const [products, setProducts] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [newProduct, setNewProduct] = useState({ name: '', barcode: '', expiry: new Date() });
+  const [permissionGranted, setPermissionGranted] = useState(false);
 
   useEffect(() => {
-    const loadProducts = async () => {
+    async function initCamera() {
       try {
-      // Load products from local storage on component mount
-      const storedProducts = localStorage.getItem('scannedProducts');
-      if (storedProducts) {
-        setScannedProducts(JSON.parse(storedProducts).map((product: any) => ({
-          ...product,
-          expirationDate: product.expirationDate ? new Date(product.expirationDate) : null,
-          quantity: product.quantity || 1,
-        })));
-      }
-    } catch(error){
-      console.error("Error loading products from local storage:", error);
-      toast({
-          variant: 'destructive',
-          title: 'Erro',
-          description: 'Erro ao carregar produtos salvos.',
-        });
-    }
-    }
-    loadProducts();
-  }, []);
-
-  useEffect(() => {
-    try{
-    // Save products to local storage whenever scannedProducts changes
-    localStorage.setItem('scannedProducts', JSON.stringify(scannedProducts));
-    } catch (error){
-      console.error("Error saving products to local storage:", error);
-        toast({
-            variant: 'destructive',
-            title: 'Erro',
-            description: 'Erro ao salvar produtos. As alterações podem não ser persistidas.',
-          });
-    }
-  }, [scannedProducts]);
-
-  useEffect(() => {
-    const getCameraPermission = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
-        setHasCameraPermission(true);
-        setIsCameraActive(true);
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          videoRef.current.play();
         }
+        setPermissionGranted(true);
       } catch (error) {
-        console.error('Error accessing camera:', error);
-        setHasCameraPermission(false);
-        setIsCameraActive(false);
-        toast({
-          variant: 'destructive',
-          title: 'Camera Access Denied',
-          description: 'Please enable camera permissions in your browser settings to use this app.',
-        });
+        console.error('Erro ao acessar a câmera:', error);
+        setPermissionGranted(false);
       }
-    };
-
-    const initializeCamera = async () => {
-      try {
-        await getCameraPermission();
-      } catch (error) {
-        console.error("Error initializing camera:", error);
-      }
-    };
-
-    initializeCamera();
+    }
+    initCamera();
   }, []);
 
-  const handleScan = async () => {
-    try {
-      if (!isValidEan(eanCode)) {
-        setIsEanValid(false);
-        toast({
-          title: 'Error',
-          description: 'Código EAN inválido.',
-        });
-        return;
+  async function captureAndDecode() {
+    const video = videoRef.current;
+    if (video) {
+      const codeReader = new BrowserMultiFormatReader();
+      try {
+        const result = await codeReader.decodeOnceFromVideoDevice(undefined, video);
+        if (result?.text) {
+          setNewProduct(prev => ({ ...prev, barcode: result.text }));
+        } else {
+          alert('Nenhum código detectado.');
+        }
+      } catch (error) {
+        console.error('Erro ao decodificar:', error);
+        alert('Falha ao escanear o código.');
+      } finally {
+        codeReader.reset();
       }
-
-      setIsEanValid(true);
-
-      if (!expirationDate) {
-        toast({
-          title: 'Error',
-          description: 'Por favor, selecione uma data de validade.',
-        });
-        return;
-      }
-
-      const parsedQuantity = Number(quantity);
-      if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
-          toast({
-              title: 'Error',
-              description: 'A quantidade deve ser um número maior que zero.',
-          });
-          return;
-      }
-
-      if (quantity <= 0) {
-        toast({
-          title: 'Error',
-          description: 'A quantidade deve ser maior que zero.',
-        });
-        return;
-      }
-
-      const generatedProductName = await getProductName(eanCode, setIsManualNamingOpen);
-      setProductName(generatedProductName);
-      if (generatedProductName === 'Nome do Produto Não Encontrado') {
-        // Open the dialog for manual naming
-        return;
-      }
-
-      const newProduct: Product = {
-        eanCode,
-        productName: generatedProductName,
-        expirationDate,
-        quantity,
-      };
-
-      setScannedProducts([...scannedProducts, newProduct]);
-      setEanCode('');
-      setExpirationDate(null);
-      setQuantity(1);
-
-      toast({
-        title: 'Sucesso',
-        description: 'Produto escaneado e salvo.',
-      });
-    } catch (error) {
-      console.error('Error during handleScan:', error);
-      toast({
-          variant: 'destructive',
-          title: 'Erro',
-          description: 'Ocorreu um erro ao processar o produto escaneado.',
-        });
     }
-  };
+  }
 
-  const confirmManualNaming = () => {
-    if (manualProductName.trim() === '') {
-      toast({
-        title: 'Error',
-        description: 'Por favor, insira um nome para o produto.',
-      });
-      return;
-    }
-
-    const newProduct: Product = {
-      eanCode,
-      productName: manualProductName,
-      expirationDate,
-      quantity,
-    };
-
-    setScannedProducts([...scannedProducts, newProduct]);
-    setEanCode('');
-    setExpirationDate(null);
-    setQuantity(1);
-    setIsManualNamingOpen(false);
-    setManualProductName('');
-
-    toast({
-      title: 'Sucesso',
-      description: 'Produto escaneado e salvo com nome manual.',
-    });
-  };
-
-  const clearProductList = () => {
-    setScannedProducts([]);
-    localStorage.removeItem('scannedProducts');
-  };
-
-  const sortedProducts = [...scannedProducts].sort((a, b) => {
-    if (!a.expirationDate || !b.expirationDate) {
-      return 0;
-    }
-    return a.expirationDate.getTime() - b.expirationDate.getTime();
-  });
-
-  const exportToExcel = async () => {
-    try {
-      const XLSX = (await import('xlsx')) as typeof XLSXTYPE;
-
-      if (!sortedProducts?.length) {
-        toast({
-          title: 'Error',
-          description: 'Nenhum produto para exportar.',
-        });
-        return;
-      }
-
-      const data = sortedProducts.map(product => ({
-        'Código EAN': product.eanCode,
-        'Nome do Produto': product.productName,
-        'Data de Validade': product.expirationDate instanceof Date
-          ? format(product.expirationDate, 'dd/MM/yyyy')
-          : 'Sem data',
-        'Quantidade': product.quantity,
-      }));
-
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(data);
-      XLSX.utils.book_append_sheet(wb, ws, 'Validades');
-      XLSX.writeFile(wb, 'validades.xlsx');
-      clearProductList();
-        setScannedProducts([]);
-        localStorage.removeItem('scannedProducts');
-    } catch (error) {
-      console.error('Erro ao exportar para Excel:', error);
-      toast({
-        title: 'Erro',
-        description: 'Erro ao gerar ou salvar o arquivo Excel.',
-      });
-    } 
-  };
-
-  const shareExcel = async () => {
-    try {
-      const XLSX = (await import('xlsx')) as typeof XLSXTYPE;
-      if (!sortedProducts?.length) {
-        toast({
-          title: 'Error',
-          description: 'Nenhum produto para compartilhar.',
-        });
-        return;
-      }
-      const data = sortedProducts.map(product => ({
-        'Código EAN': product.eanCode,
-        'Nome do Produto': product.productName,
-        'Data de Validade': product.expirationDate ? format(product.expirationDate, 'dd/MM/yyyy') : 'Sem data',
-        'Quantidade': product.quantity,
-      }));
-
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(data);
-      XLSX.utils.book_append_sheet(wb, ws, 'Validades');
-      const excelData = XLSX.write(wb, {bookType: 'xlsx', type: 'array'});
-      const excelBlob = new Blob([excelData], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-      const excelFile = new File([excelBlob], 'validades.xlsx', {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-
-      if (navigator.share) {
-        navigator.share({
-          title: 'Lista de Validades',
-          text: 'Lista de validades de produtos escaneados.',
-          files: [excelFile],
-        })
-          .then(() => console.log('Compartilhado com sucesso'))
-          .catch((error) => console.error('Erro ao compartilhar:', error));
-           setScannedProducts([]);
-          localStorage.removeItem('scannedProducts');
-      } else {
-        toast({
-          title: 'Erro',
-          description: 'Compartilhamento não suportado neste navegador.',
-        });
-      }
-    } catch (error) {
-      console.error('Erro ao compartilhar:', error);
-      toast({
-        title: 'Erro',
-        description: 'Erro ao gerar ou compartilhar o arquivo Excel.',
-      });
-    }
-  };
-
-  // Function to delete a product from the scanned products list
-  const deleteProduct = (index: number) => {
-    const updatedProducts = [...scannedProducts];
-    updatedProducts.splice(index, 1);
-    setScannedProducts(updatedProducts);
-    toast({
-      title: 'Sucesso',
-      description: 'Produto removido da lista.',
-    });
-  };
-
-  const handleCameraScan = () => {
-    try {
-      setIsCameraActive(!isCameraActive);
-    } catch (error) {
-      console.error('Error toggling camera:', error);
-      toast({
-        variant: 'destructive',
-        title: 'Camera Error',
-        description: 'Failed to toggle camera. Please try again.',
-      });
-    }
-  };
-
-  // New function to capture the image from the camera
-  const captureImage = () => {
-    if (videoRef.current) {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        const imageUrl = canvas.toDataURL('image/png'); // Convert to data URL
-
-        setCapturedImage(imageUrl); // Set the captured image
-        decodeImage(imageUrl); // Immediately attempt to decode the image
-      } else {
-         toast({
-          variant: 'destructive',
-          title: 'Canvas Error',
-          description: 'Could not get canvas context.',
-        });
-      }
+  function addProduct() {
+    if (newProduct.name && newProduct.barcode && newProduct.expiry) {
+      setProducts([...products, newProduct]);
+      setNewProduct({ name: '', barcode: '', expiry: new Date() });
     } else {
-      toast({
-        variant: 'destructive',
-        title: 'Video Error',
-        description: 'Video element not found.',
-      });
+      alert('Preencha todos os campos.');
     }
-  };
+  }
 
-  // New function to decode the image and set the EAN code
-  const decodeImage = async (imageUrl: string) => {
-    setIsProcessingImage(true); // Indicate processing
-
-    try {
-      const result = await decodeBarcode({imageUrl}); // Call the Genkit flow
-      if (result.eanCode) {
-        setEanCode(result.eanCode); // Set the EAN code if found
-      } else {
-        toast({
-          title: 'Barcode Not Found',
-          description: 'Nenhum código de barras encontrado na imagem.',
-        });
-      }
-    } catch (error) {
-      console.error('Error decoding barcode:', error);
-      toast({
-        variant: 'destructive',
-        title: 'Erro de Decodificação',
-        description: 'Ocorreu um erro ao decodificar o código de barras.',
-      });
-    } finally {
-      setIsProcessingImage(false); // End processing, whether success or fail
+  function handleShare() {
+    const text = products.map(p => `Produto: ${p.name}, Código: ${p.barcode}, Validade: ${format(p.expiry, 'dd/MM/yyyy')}`).join('\n');
+    if (navigator.share) {
+      navigator.share({ title: 'Lista de Produtos', text });
+    } else {
+      alert('Compartilhamento não suportado neste navegador.');
     }
-  };
-
-
-  const handleBarcodeDetected = (code: string) => {
-    setEanCode(code);
-    setIsCameraActive(false);
-  };
+  }
 
   return (
-    <div className="flex flex-col items-center justify-start min-h-screen bg-secondary p-4">
-      <header className="w-full text-center mb-8">
-        <div className="absolute top-4 right-4">
-            <ThemeToggle/>
-        </div>
-        <h1 className="text-2xl font-bold text-primary">ValidaFácil</h1>
-        <p className="text-muted-foreground">Escaneie produtos e acompanhe as datas de validade</p>
-      </header>
+    <div className="p-4 max-w-3xl mx-auto space-y-6">
+      <h1 className="text-2xl font-bold text-center">Cadastro de Produtos com Validade</h1>
 
-      <Card className="w-full max-w-md mb-4">
-        <CardHeader>
-          <CardTitle>Scanear Produto</CardTitle>
-          <CardDescription>Insira o código EAN e a data de validade</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="flex justify-around">
-            <Button
-              variant={scanType === 'manual' ? 'default' : 'outline'}
-              onClick={() => {
-                setIsCameraActive(false);
-                setScanType('manual');
-              }}
-            >
-              Digitar EAN
-            </Button>
-            <Button
-              variant={scanType === 'camera' ? 'default' : 'outline'}
-              onClick={() => {
-                setIsCameraActive(true);
-                setScanType('camera');
-              }}
-            >
-              Escanear com Câmera
-            </Button>
-          </div>
-
-          
-            {/* Camera View and Capture Button */}
-            <div className="relative">
-              <video ref={videoRef} className="w-full aspect-video rounded-md" autoPlay muted />
-
-              {hasCameraPermission ? (
-                <Button
-                  onClick={captureImage}
-                  disabled={isProcessingImage}
-                  className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground"
-                >
-                  {isProcessingImage ? 'Processando...' : 'Capturar Imagem'}
-                </Button>
-              ) : (
-                <Alert variant="destructive">
-                  <AlertTitle>Camera Access Required</AlertTitle>
-                  <AlertDescription>
-                    Please allow camera access to use this feature.
-                  </AlertDescription>
-                </Alert>
-              )}
-            </div>
-
-          {scanType === 'manual' ? (
-            <div className="grid gap-2">
-              <Input
-                type="number"
-                placeholder="Código EAN"
-                value={eanCode}
-                onChange={(e) => setEanCode(e.target.value)}
-              />
-              {!isEanValid && <p className="text-red-500 text-sm">Código EAN inválido</p>}
-            </div>
-          ) : null}
-
-          <div className="grid gap-2">
-            <Input
-              type="number"
-              placeholder="Quantidade"
-              value={quantity}
-              onChange={(e) => setQuantity(Number(e.target.value))}
-              
-              min={1}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Calendar
-              mode="single"
-              selected={expirationDate}
-              onSelect={setExpirationDate}
-              className="rounded-md border"
-            />
-            {expirationDate ? (
-              <p className="text-muted-foreground">
-                Data selecionada: {format(expirationDate, 'PPP')}
-              </p>
-            ) : (
-              <p className="text-muted-foreground">Por favor, selecione uma data.</p>
-            )}
-          </div>
-          <Button onClick={handleScan} className="bg-primary text-primary-foreground">
-            <Icons.barcode className="w-4 h-4 mr-2"/>
-            Escanear Produto
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Produtos Escaneados</CardTitle>
-          <CardDescription>Lista de produtos escaneados ordenados por data de validade</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {sortedProducts.length === 0 ? (
-            <p>Nenhum produto escaneado ainda.</p>
-          ) : (
-            <ul className="list-none p-0">
-              {sortedProducts.map((product, index) => (
-                <li key={index} className="py-2 border-b border-border flex items-center justify-between">
-                  <div>
-                    <div className="font-bold">{product.productName}</div>
-                    <div>EAN: {product.eanCode}</div>
-                    <div>Quantidade: {product.quantity}</div>
-                    <div>
-                      Validade:{' '}
-                      {product.expirationDate
-                        ? format(product.expirationDate, 'PPP')
-                        : 'Sem data de validade'}
-                    </div>
-                    <ExpirationAlert expirationDate={product.expirationDate}/>
-                  </div>
-                  <Button onClick={() => deleteProduct(index)} variant="destructive" size="icon">
-                    <Icons.trash className="w-4 h-4"/>
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="flex justify-between mt-4">
-            <Button onClick={exportToExcel} variant="secondary">
-              Exportar para Excel
-            </Button>
-            <Button onClick={shareExcel} variant="secondary">
-              Compartilhar Excel
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-      <AlertDialog open={isManualNamingOpen} onOpenChange={setIsManualNamingOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Nomear Produto</AlertDialogTitle>
-            <AlertDialogDescription>
-              Produto não encontrado. Por favor, insira um nome para o produto com código EAN {eanCode}.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <label className="block font-medium">Nome do Produto</label>
           <Input
-            type="text"
-            placeholder="Nome do Produto"
-            value={manualProductName}
-            onChange={(e) => setManualProductName(e.target.value)}
+            value={newProduct.name}
+            onChange={e => setNewProduct(prev => ({ ...prev, name: e.target.value }))}
+            placeholder="Ex: Leite UHT"
           />
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => {
-              setIsManualNamingOpen(false);
-              setEanCode('');
-              setExpirationDate(null);
-              setQuantity(1);
-            }}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmManualNaming}>Confirmar</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
-      {/* Footer */}
-      <footer className="w-full text-center mt-8 p-4 text-muted-foreground">
-        © 2025 Evandro Fernandes. Todos os direitos reservados.
-      </footer>
+          <label className="block font-medium">Código de Barras</label>
+          <div className="flex gap-2 items-center">
+            <Input
+              value={newProduct.barcode}
+              onChange={e => setNewProduct(prev => ({ ...prev, barcode: e.target.value }))}
+              placeholder="Escaneie ou digite o código"
+            />
+            <Button onClick={captureAndDecode}>Escanear</Button>
+          </div>
+
+          <label className="block font-medium">Validade</label>
+          <Calendar
+            mode="single"
+            selected={newProduct.expiry}
+            onSelect={date => setNewProduct(prev => ({ ...prev, expiry: date }))}
+          />
+
+          <Button className="mt-4 w-full" onClick={addProduct}>Adicionar Produto</Button>
+        </div>
+
+        <div>
+          <video ref={videoRef} className="w-full rounded-lg shadow" autoPlay playsInline muted />
+        </div>
+      </div>
+
+      <div className="mt-8 space-y-4">
+        <h2 className="text-xl font-semibold">Produtos Cadastrados</h2>
+        {products.length === 0 ? (
+          <p className="text-gray-500">Nenhum produto adicionado ainda.</p>
+        ) : (
+          <ul className="space-y-2">
+            {products.map((product, index) => (
+              <li key={index} className="border p-3 rounded-lg shadow-sm">
+                <p><strong>Nome:</strong> {product.name}</p>
+                <p><strong>Código:</strong> {product.barcode}</p>
+                <p><strong>Validade:</strong> {format(product.expiry, 'dd/MM/yyyy')}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="flex gap-4 mt-6 justify-center">
+        <Button onClick={() => exportToExcel(products)}>Exportar para Excel</Button>
+        <Button onClick={handleShare} variant="outline">
+          <Share2 className="w-4 h-4 mr-2" /> Compartilhar
+        </Button>
+      </div>
     </div>
   );
 }
-
