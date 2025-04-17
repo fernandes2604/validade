@@ -156,6 +156,27 @@ export default function Home() {
         quantity: product.quantity || 1,
       })));
     }
+
+    // Request camera permission on component mount
+    const getCameraPermission = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
+        setHasCameraPermission(true);
+        setIsCameraActive(true);
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (error) {
+        console.error('Error accessing camera:', error);
+        setHasCameraPermission(false);
+        toast({
+          variant: 'destructive',
+          title: 'Camera Access Denied',
+          description: 'Please enable camera permissions in your browser settings to use this app.',
+        });
+      }
+    };
+    getCameraPermission();
   }, []);
 
   useEffect(() => {
@@ -255,6 +276,11 @@ export default function Home() {
     });
   };
 
+  const clearProductList = () => {
+    setScannedProducts([]);
+    localStorage.removeItem('scannedProducts');
+  };
+
   const sortedProducts = [...scannedProducts].sort((a, b) => {
     if (!a.expirationDate || !b.expirationDate) {
       return 0;
@@ -263,29 +289,50 @@ export default function Home() {
   });
 
   const exportToExcel = async () => {
-    const XLSX = (await import('xlsx')) as typeof XLSXTYPE;
+    try {
+      const XLSX = (await import('xlsx')) as typeof XLSXTYPE;
 
-    if (!sortedProducts?.length) return;
+      if (!sortedProducts?.length) {
+        toast({
+          title: 'Error',
+          description: 'Nenhum produto para exportar.',
+        });
+        return;
+      }
 
-    const data = sortedProducts.map(product => ({
-      'Código EAN': product.eanCode,
-      'Nome do Produto': product.productName,
-      'Data de Validade': product.expirationDate instanceof Date
-        ? format(product.expirationDate, 'dd/MM/yyyy')
-        : 'Sem data',
-      'Quantidade': product.quantity,
-    }));
+      const data = sortedProducts.map(product => ({
+        'Código EAN': product.eanCode,
+        'Nome do Produto': product.productName,
+        'Data de Validade': product.expirationDate instanceof Date
+          ? format(product.expirationDate, 'dd/MM/yyyy')
+          : 'Sem data',
+        'Quantidade': product.quantity,
+      }));
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(data);
-    XLSX.utils.book_append_sheet(wb, ws, 'Validades');
-    XLSX.writeFile(wb, 'validades.xlsx');
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(data);
+      XLSX.utils.book_append_sheet(wb, ws, 'Validades');
+      XLSX.writeFile(wb, 'validades.xlsx');
+      clearProductList();
+    } catch (error) {
+      console.error('Erro ao exportar para Excel:', error);
+      toast({
+        title: 'Erro',
+        description: 'Erro ao gerar ou salvar o arquivo Excel.',
+      });
+    }
   };
-
 
   const shareExcel = async () => {
     try {
       const XLSX = (await import('xlsx')) as typeof XLSXTYPE;
+      if (!sortedProducts?.length) {
+        toast({
+          title: 'Error',
+          description: 'Nenhum produto para compartilhar.',
+        });
+        return;
+      }
       const data = sortedProducts.map(product => ({
         'Código EAN': product.eanCode,
         'Nome do Produto': product.productName,
@@ -308,6 +355,7 @@ export default function Home() {
         })
           .then(() => console.log('Compartilhado com sucesso'))
           .catch((error) => console.error('Erro ao compartilhar:', error));
+          clearProductList();
       } else {
         toast({
           title: 'Erro',
@@ -333,28 +381,6 @@ export default function Home() {
       description: 'Produto removido da lista.',
     });
   };
-
-  useEffect(() => {
-    const getCameraPermission = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
-        setHasCameraPermission(true);
-        setIsCameraActive(true); // Automatically start the camera
-        // if (videoRef.current) {
-        //   videoRef.current.srcObject = stream;
-        // }
-      } catch (error) {
-        console.error('Error accessing camera:', error);
-        setHasCameraPermission(false);
-        toast({
-          variant: 'destructive',
-          title: 'Camera Access Denied',
-          description: 'Please enable camera permissions in your browser settings to use this app.',
-        });
-      }
-    };
-      getCameraPermission();
-  }, []);
 
   const handleCameraScan = () => {
     try {
@@ -540,3 +566,5 @@ export default function Home() {
     </div>
   );
 }
+
+
