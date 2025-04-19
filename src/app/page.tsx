@@ -140,9 +140,9 @@ export default function Home() {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">ScanStock</h1>
+      <h1 className="text-2xl font-bold mb-4">Valida fácil</h1>
 
-      <div className="mb-4 border-2 border-dashed rounded-lg p-4 bg-secondary">
+      <div className="mb-4 border-dashed rounded-lg p-4 bg-secondary">
         <p className="mb-2 text-sm text-muted-foreground">
           Aponte a câmera para o código de barras e clique em <strong>Capturar</strong> para ler o código.
         </p>
